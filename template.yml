@@ -1,0 +1,231 @@
+Transform: 'AWS::Serverless-2016-10-31'
+
+Description: |
+  SAM Template for a Lambda handler that handles HTTP requests as part
+  of a Slack App integration that responds to user's message in a Slack channel.
+
+  Pre-requsite:
+  1. Create a Slack App and configure the following:
+  - Event Subscription: Enable and subscribe to message.channels event
+  - OAuth & Permissions: Install the App to your workspace and copy the Bot User OAuth Token
+  2. A VPC with both public and private subnets.
+  - There must be at least one NAT Gateway in the public subnet for the Lambda function to access the internet.
+
+  After this template is deployed, you need to configure the following:
+  1. Slack App settings:
+  - Interactivity & Shortcuts: Enable and configure Request URL to the API Gateway endpoint
+  2. Add the new Slack App into a Slack channel to start interacting with the bot.
+
+Parameters:
+  DBUsername:
+    NoEcho: 'true'
+    Description: Username for database access
+    Type: String
+    MinLength: '1'
+    MaxLength: '16'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: Must begin with a letter and contain only alphanumeric characters.
+    Default: itbot
+  DBPassword:
+    NoEcho: 'true'
+    Description: Password for database access
+    Type: String
+    MinLength: '8'
+    MaxLength: '41'
+    AllowedPattern: '[a-zA-Z0-9]*'
+    ConstraintDescription: Must contain only alphanumeric characters.
+  DBClusterIdentifier:
+    Type: String
+    Default: it-bot
+  DBEngineVersion:
+    Type: String
+    Default: 16.2
+  FunctionName:
+    Type: String
+    Description: Name of the Lambda function
+    Default: it-support-bot-handler
+  PythonRuntime:
+    Type: String
+    Description: Python version to use for the Lambda function
+    Default: python3.12
+  SlackBotToken:
+    Type: String
+    Description: Slack API token of your App, refer to "Installed App" settings, "Bot User OAuth Token" field.
+    NoEcho: true
+  SlackSigningSecret:
+    Type: String
+    Description: Signing secret of your Slack App, refer to "Basic Information" settings, "App Credentials" > "Signing Secret"
+    NoEcho: true
+  PrivateSubnetIds:
+    Description: The private Subnet IDs, it's recommended to use multiple Subnets for high availability.
+    Type: List<AWS::EC2::Subnet::Id>
+  VpcId:
+    Description: The VPC ID to associate with the resources
+    Type: AWS::EC2::VPC::Id
+
+Resources:
+  Function:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      FunctionName: !Ref FunctionName
+      Description: |
+        Lambda function that acts as handler for Slack App event subscriptions
+      Runtime: !Ref PythonRuntime
+      Architectures: [ 'x86_64' ]
+      CodeUri: ./function
+      Handler: lambda_function.lambda_handler
+      Environment:
+        Variables:
+          # For production setup, move to AWS Systems Manager Param Store / Secrets Manager instead
+          DB_HOST: !GetAtt RDSDBCluster.Endpoint.Address
+          DB_USER: !Ref DBUsername
+          DB_PASSWORD: !Ref DBPassword
+          DB_PORT: 5432
+          DB_NAME: postgres
+          SLACK_BOT_TOKEN: !Ref SlackBotToken
+          SLACK_SIGNING_SECRET: !Ref SlackSigningSecret
+      Layers:
+        - !Ref PythonFunctionLayer
+      # A certain amount of memory is essential in order to load all Python layer dependencies
+      MemorySize: 256
+      Timeout: 150
+      Policies:
+        - AWSLambdaBasicExecutionRole
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: '*'
+      AutoPublishAlias: live
+      Events:
+        SlackEvent:
+          Type: Api
+          Properties:
+            Path: /webhook/events
+            Method: post
+            RestApiId: !Ref Api
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroup
+        SubnetIds: !Split [',', !Join [',', !Ref PrivateSubnetIds]]
+
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: live
+      AlwaysDeploy: true
+
+  PythonFunctionLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub '${FunctionName}-lambda-layer'
+      Description: !Sub 'Lambda layer for ${FunctionName}'
+      ContentUri: ./python_layer
+      CompatibleArchitectures:
+        - x86_64
+      CompatibleRuntimes:
+        - !Ref PythonRuntime
+    Metadata:
+      BuildMethod: !Ref PythonRuntime
+
+  LambdaSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group for Lambda function
+      VpcId: !Ref VpcId
+
+  DBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security group for RDS database
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '5432'
+          ToPort: '5432'
+          SourceSecurityGroupId: !Ref LambdaSecurityGroup
+
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS database
+      SubnetIds: !Split [',', !Join [',', !Ref PrivateSubnetIds]]
+
+  RDSDBCluster:
+    Type: 'AWS::RDS::DBCluster'
+    Properties:
+      Engine: aurora-postgresql
+      DBClusterIdentifier: !Ref DBClusterIdentifier
+      EngineVersion: !Ref DBEngineVersion
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      Port: 5432
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VpcSecurityGroupIds:
+         - !Ref DBSecurityGroup
+      ServerlessV2ScalingConfiguration:
+        MinCapacity: 0.5
+        MaxCapacity: 2
+      EnableHttpEndpoint: true
+
+  RDSDBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      Engine: aurora-postgresql
+      DBInstanceClass: db.serverless
+      DBClusterIdentifier: !Ref RDSDBCluster
+
+  # RdsSchedulerRole:
+  #   Type: 'AWS::IAM::Role'
+  #   Properties:
+  #     AssumeRolePolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: 'Allow'
+  #           Principal:
+  #             Service: 'scheduler.amazonaws.com'
+  #           Action: 'sts:AssumeRole'
+  #     Description: 'start and stop RDS'
+  #     Policies:
+  #       - PolicyName: 'RdsSchedulerPolicy'
+  #         PolicyDocument:
+  #           Version: '2012-10-17'
+  #           Statement:
+  #             - Effect: 'Allow'
+  #               Action:
+  #                 - rds:DescribeDBInstances
+  #                 - rds:startDBCluster
+  #                 - rds:stopDBCluster
+  #               Resource:
+  #                 - !GetAtt RDSDBCluster.DBClusterArn
+  #                 - !GetAtt RDSDBInstance.DBInstanceArn
+
+  # StartRdsScheduler:
+  #   Type: 'AWS::Scheduler::Schedule'
+  #   Properties:
+  #     Description: 'Start Knowledge Base RDS Instance at the start of working day'
+  #     ScheduleExpression: 'cron(0 1 ? * MON-FRI *)'  # 1 AM UTC (9 AM UTC+8)
+  #     FlexibleTimeWindow:
+  #       Mode: 'OFF'
+  #     Target:
+  #       Arn: 'arn:aws:scheduler:::aws-sdk:rds:startDBCluster'
+  #       RoleArn: !GetAtt RdsSchedulerRole.Arn
+  #       Input: '{"DbClusterIdentifier": "${DbClusterIdentifier}"}'
+
+  # StopRdsScheduler:
+  #   Type: 'AWS::Scheduler::Schedule'
+  #   Properties:
+  #     Description: 'Stop Knowledge Base RDS Instance at the end of working day'
+  #     ScheduleExpression: 'cron(* 10 ? * MON-FRI *)'  # 10 AM UTC (6 PM UTC+8)
+  #     FlexibleTimeWindow:
+  #       Mode: 'OFF'
+  #     Target:
+  #       Arn: 'arn:aws:scheduler:::aws-sdk:rds:stopDBCluster'
+  #       RoleArn: !GetAtt RdsSchedulerRole.Arn
+  #       Input: '{"DbClusterIdentifier": "${DbClusterIdentifier}"}'
+
+Outputs:
+  SlackEventUrl:
+    Description: URL of the API Gateway endpoint
+    Value: !Sub 'https://${Api}.execute-api.${AWS::Region}.amazonaws.com/live/webhook/events'
