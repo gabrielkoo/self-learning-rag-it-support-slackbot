@@ -6,7 +6,7 @@ from db import create_db_record, get_db_records_by_embedding
 
 EMBEDDING_MODEL_ID = 'amazon.titan-embed-text-v2:0'
 
-bedrock_runtime = boto3.client('bedrock-runtime', region_name='us-east-1')
+bedrock_runtime_us_east_1 = boto3.client('bedrock-runtime', region_name='us-east-1')
 
 
 def create_embedding(input_text: str):
@@ -17,7 +17,7 @@ def create_embedding(input_text: str):
         'dimensions': 1024,
     })
 
-    response = bedrock_runtime.invoke_model(
+    response = bedrock_runtime_us_east_1.invoke_model(
         body=body,
         modelId=EMBEDDING_MODEL_ID,
         accept=accept,

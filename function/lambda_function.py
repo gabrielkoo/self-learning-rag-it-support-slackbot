@@ -16,6 +16,10 @@ if TYPE_CHECKING:
         ToolUseBlockTypeDef,
     )
 
+# This is to avoid less capable models from entering a dead for loop
+# when the tool results are not satisfactory while the LLM still tries to retry.
+MAX_TOOL_CALL_LOOPS = 4
+
 
 @slack_app.event('message')
 def handle_keywords(event: dict, say):
@@ -45,7 +49,7 @@ def handle_keywords(event: dict, say):
 
         calls = 0
 
-        while True:
+        while calls < MAX_TOOL_CALL_LOOPS:
             completion_response = get_completion_response(converse_messages, force_tool_use=calls == 0)
             completion_response_content: list['ContentBlockTypeDef'] = completion_response['content']  # type: ignore
 
@@ -73,9 +77,10 @@ def handle_keywords(event: dict, say):
                                 logger.info(f'Tool {tool_name} called successfully.')
                             status = 'success'
                         except Exception as e:  # pylint: disable=broad-except
-                            logger.exception(f'Error occured with tool {tool_name}: {traceback.format_exc()}')
+                            error_details = traceback.format_exc()
+                            logger.exception(f'Error occured with tool {tool_name}: {error_details}')
                             tool_result_content_block = {
-                                'text': f'Error: {e}',
+                                'text': f'Error: {error_details}',
                             }
                             status = 'error'
 
@@ -101,7 +106,15 @@ def handle_keywords(event: dict, say):
 
         if len(completion_response_content) == 0:
             raise Exception(f'No completion response content - {completion_response_content}')
-        response_text = completion_response_content[0]['text']  # type: ignore
+
+        response_text = completion_response_content[0].get('text')  # type: ignore
+
+        if not response_text:
+            say(
+                channel=channel,
+                text='Maximum tool call depth reached. Please try again later.',
+                thread_ts=reply_ts,
+            )
 
         logger.info(f'Assistant reply: {response_text}')
 

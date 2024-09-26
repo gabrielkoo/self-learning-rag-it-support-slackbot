@@ -7,8 +7,13 @@ source ./.env
 
 sam build \
     --use-container \
-    --template template.yml \
-    --no-cached
+    --template template.yml
+
+# Error handling
+if [ $? -ne 0 ]; then
+    echo "Failed to build the application during Layer build."
+    exit 1
+fi
 
 sam deploy \
     --region $AWS_REGION \

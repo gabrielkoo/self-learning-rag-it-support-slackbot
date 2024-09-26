@@ -142,7 +142,7 @@ TOOL_SPECS: list['ToolSpecificationTypeDef'] = [
     },
     {
         'name': 'snapshot_knowledge',
-        'description': 'Snapshot knowledge into the knowledge database. Do not use for time-sensitive information.',
+        'description': 'Snapshot new knowledge into the knowledge database only when necessary. Only include meaningful information.',
         'inputSchema': {
             'json': {
                 'type': 'object',
