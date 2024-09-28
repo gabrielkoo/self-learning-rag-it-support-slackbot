@@ -60,7 +60,7 @@ def retreive_url(*, url: str) -> 'ToolResultContentBlockOutputTypeDef':
         }
     elif content_type.startswith('application/json'):
         return {
-            'json': response.json(),
+            'text': response.data.decode('utf-8'),
         }
     elif content_type.startswith(('text/', 'application/')):
         doc_format: 'DocumentFormatType' = content_secondary_type if content_secondary_type in [

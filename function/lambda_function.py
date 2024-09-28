@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 # This is to avoid less capable models from entering a dead for loop
 # when the tool results are not satisfactory while the LLM still tries to retry.
-MAX_TOOL_CALL_LOOPS = 4
+MAX_TOOL_CALL_LOOPS = 10
 
 
 @slack_app.event('message')
